@@ -769,67 +769,68 @@
     ];
 
     /**
-     * Mesin Penyimpanan Klien Menggunakan IndexedDB Standard
-     * Mematuhi aturan ketat tanpa menyentuh localStorage
+     * MESIN PENYIMPANAN AUTOSAVE HANDAL & SINKRON
+     * Bekerja optimal di GitHub Pages, file:/// lokal, maupun lingkungan peramban pribadi.
      */
-    const IDB_CONFIG = {
-      dbName: 'TKA_2026_BogorPermata_DB',
-      storeName: 'exam_state',
-      version: 1
-    };
+    const STORAGE_KEY_SESSION = 'TKA2026_BOGOR_QUIZ_SESSION';
+    const STORAGE_KEY_REPORT = 'TKA2026_BOGOR_COMPLETED_REPORT';
 
-    function openExamDB() {
-      return new Promise((resolve, reject) => {
-        if (!window.indexedDB) {
-          resolve(null);
-          return;
+    const StorageEngine = {
+      isAvailable() {
+        try {
+          const testKey = '__autosave_test__';
+          window.localStorage.setItem(testKey, testKey);
+          window.localStorage.removeItem(testKey);
+          return true;
+        } catch (e) {
+          return false;
         }
-        const request = window.indexedDB.open(IDB_CONFIG.dbName, IDB_CONFIG.version);
-        request.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains(IDB_CONFIG.storeName)) {
-            db.createObjectStore(IDB_CONFIG.storeName, { keyPath: 'key' });
+      },
+      save(key, data) {
+        try {
+          const serialized = JSON.stringify(data);
+          if (this.isAvailable()) {
+            window.localStorage.setItem(key, serialized);
+          } else {
+            window.sessionStorage.setItem(key, serialized);
           }
-        };
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onerror = (e) => resolve(null);
-      });
-    }
-
-    async function saveStateToDB(key, data) {
-      try {
-        const db = await openExamDB();
-        if (!db) return;
-        const tx = db.transaction(IDB_CONFIG.storeName, 'readwrite');
-        const store = tx.objectStore(IDB_CONFIG.storeName);
-        store.put({ key, value: data, updatedAt: Date.now() });
-      } catch (err) {
-        console.warn("Gagal menyimpan ke IndexedDB:", err);
+        } catch (err) {
+          console.warn("StorageEngine save warning:", err);
+        }
+      },
+      load(key) {
+        try {
+          let raw = null;
+          if (this.isAvailable()) {
+            raw = window.localStorage.getItem(key);
+          }
+          if (!raw) {
+            raw = window.sessionStorage.getItem(key);
+          }
+          return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+          console.warn("StorageEngine load warning:", err);
+          return null;
+        }
+      },
+      remove(key) {
+        try {
+          if (this.isAvailable()) {
+            window.localStorage.removeItem(key);
+          }
+          window.sessionStorage.removeItem(key);
+        } catch (err) {
+          console.warn("StorageEngine remove warning:", err);
+        }
       }
-    }
-
-    async function loadStateFromDB(key) {
-      try {
-        const db = await openExamDB();
-        if (!db) return null;
-        return new Promise((resolve) => {
-          const tx = db.transaction(IDB_CONFIG.storeName, 'readonly');
-          const store = tx.objectStore(IDB_CONFIG.storeName);
-          const req = store.get(key);
-          req.onsuccess = () => resolve(req.result ? req.result.value : null);
-          req.onerror = () => resolve(null);
-        });
-      } catch (err) {
-        console.warn("Gagal membaca IndexedDB:", err);
-        return null;
-      }
-    }
+    };
 
     // User answer state tracking
     let userProgress = QUESTIONS.map(() => ({
       isSubmitted: false,
       isCorrect: false,
-      answer: null
+      answer: null,
+      draftAnswer: null
     }));
 
     let currentQuestionIdx = 0; // 0 to 9
@@ -838,9 +839,9 @@
     let remainingTimeSeconds = TOTAL_QUIZ_DURATION_SECONDS;
     let timerInterval = null;
     let isExamFinished = false;
+    let isExamInProgress = false;
     let examStartTime = null;
 
-    /* Custom Toast Notification Helper (Pengganti alert()) */
     function showToast(message, isSuccess = true) {
       const toast = document.getElementById('toast');
       const toastMsg = document.getElementById('toast-message');
@@ -859,28 +860,35 @@
       setTimeout(() => {
         toast.classList.remove('translate-y-0', 'opacity-100');
         toast.classList.add('translate-y-20', 'opacity-0');
-      }, 3000);
+      }, 3500);
     }
 
-    async function triggerAutosave() {
+    /**
+     * Menyimpan seluruh status pengerjaan secara instan (real-time).
+     * Meliputi: identitas, status ujian aktif, nomor soal terakhir, sisa waktu, serta jawaban terkunci & draf.
+     */
+    function triggerAutosave() {
       if (isExamFinished) return;
+
       const snapshot = {
+        inProgress: isExamInProgress,
         studentName,
         studentClass,
         currentQuestionIdx,
         remainingTimeSeconds,
         userProgress,
         examStartTime: examStartTime || Date.now(),
-        lastActive: Date.now(),
-        isCompleted: false
+        lastSavedAt: Date.now()
       };
-      await saveStateToDB('current_quiz_session', snapshot);
-      
+
+      StorageEngine.save(STORAGE_KEY_SESSION, snapshot);
+
       const indicator = document.getElementById('autosave-indicator');
-      if (indicator) {
+      if (indicator && isExamInProgress) {
+        const timeFormatted = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         indicator.innerHTML = `
           <svg class="w-3.5 h-3.5 mr-1 text-emerald-500 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-          Tersimpan ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          Autosave aktif • ${timeFormatted}
         `;
       }
     }
@@ -905,19 +913,16 @@
           remainingTimeSeconds--;
           timerDisplay.textContent = formatTime(remainingTimeSeconds);
 
-          // Peringatan visual saat waktu tersisa sedikit
-          if (remainingTimeSeconds <= 120) { // < 2 menit
+          // Peringatan visual perubahan warna timer
+          if (remainingTimeSeconds <= 120) {
             timerBadge.className = "flex items-center px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 font-mono font-bold text-xs sm:text-sm animate-pulse";
-          } else if (remainingTimeSeconds <= 300) { // < 5 menit
+          } else if (remainingTimeSeconds <= 300) {
             timerBadge.className = "flex items-center px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 font-mono font-bold text-xs sm:text-sm";
           }
 
-          // Autosave sisa waktu berkala tiap 10 detik
-          if (remainingTimeSeconds % 10 === 0) {
-            triggerAutosave();
-          }
+          // Simpan sisa waktu secara berkala setiap detik ke autosave
+          triggerAutosave();
         } else {
-          // Waktu habis
           clearInterval(timerInterval);
           handleTimeExpired();
         }
@@ -928,12 +933,13 @@
       if (isExamFinished) return;
       showToast("Waktu 15 menit telah habis! Lembar jawaban otomatis dikumpulkan.", false);
       
-      // Kunci semua soal yang belum terjawab sebagai salah
-      userProgress.forEach((p, idx) => {
+      // Kunci seluruh soal yang belum terkunci sebagai salah
+      userProgress.forEach((p) => {
         if (!p.isSubmitted) {
           p.isSubmitted = true;
           p.isCorrect = false;
           p.answer = null;
+          p.draftAnswer = null;
         }
       });
 
@@ -963,7 +969,12 @@
             classes += "bg-rose-500 border-rose-600 text-white shadow-sm";
           }
         } else {
-          classes += "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200";
+          // Jika terdapat draf yang dipilih tetapi belum dikunci
+          if (state.draftAnswer && (Array.isArray(state.draftAnswer) ? state.draftAnswer.length > 0 : true)) {
+            classes += "bg-amber-100 border-amber-300 text-amber-900";
+          } else {
+            classes += "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200";
+          }
         }
 
         btn.className = classes;
@@ -996,7 +1007,7 @@
       optionsContainer.innerHTML = '';
       const feedbackBanner = document.getElementById('feedback-banner');
 
-      // Tampilkan status banner jika sudah dikunci (hanya hijau/merah tanpa kunci/pembahasan)
+      // Tampilkan status banner jika sudah dikunci (hanya hijau/merah tanpa pembahasan)
       if (state.isSubmitted) {
         feedbackBanner.classList.remove('hidden');
         if (state.isCorrect) {
@@ -1025,7 +1036,7 @@
         renderMatrixChoice(q, state, optionsContainer);
       }
 
-      // Re-run MathJax rendering jika terdapat ekspresi LaTeX
+      // Re-run MathJax rendering
       if (window.MathJax && window.MathJax.typesetPromise) {
         window.MathJax.typesetPromise();
       }
@@ -1089,6 +1100,7 @@
             state.isSubmitted = true;
             state.isCorrect = isRight;
             state.answer = opt.key;
+            state.draftAnswer = null;
 
             showToast(isRight ? "Jawaban Anda Benar!" : "Jawaban Anda Belum Tepat", isRight);
             renderQuestionNav();
@@ -1102,7 +1114,10 @@
     }
 
     function renderMultipleChoice(q, state, container) {
-      let tempSelection = Array.isArray(state.answer) ? [...state.answer] : [];
+      // Pulihkan draft pilihan atau jawaban tersimpan
+      let currentSelection = state.isSubmitted
+        ? (Array.isArray(state.answer) ? [...state.answer] : [])
+        : (Array.isArray(state.draftAnswer) ? [...state.draftAnswer] : []);
 
       const infoText = document.createElement('div');
       infoText.className = "text-xs font-semibold text-slate-500 mb-2 italic";
@@ -1110,7 +1125,7 @@
       container.appendChild(infoText);
 
       q.options.forEach(opt => {
-        const isChecked = tempSelection.includes(opt.id);
+        const isChecked = currentSelection.includes(opt.id);
         const item = document.createElement('label');
         
         let labelClasses = "w-full text-left p-3.5 sm:p-4 rounded-xl border text-sm font-medium transition flex items-start space-x-3 mb-2.5 ";
@@ -1140,10 +1155,14 @@
         if (!state.isSubmitted) {
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) {
-              if (!tempSelection.includes(opt.id)) tempSelection.push(opt.id);
+              if (!currentSelection.includes(opt.id)) currentSelection.push(opt.id);
             } else {
-              tempSelection = tempSelection.filter(id => id !== opt.id);
+              currentSelection = currentSelection.filter(id => id !== opt.id);
             }
+            // Autosave draf pilihan seketika
+            state.draftAnswer = [...currentSelection];
+            renderQuestionNav();
+            triggerAutosave();
           });
         }
 
@@ -1166,18 +1185,19 @@
         `;
 
         submitBtn.addEventListener('click', () => {
-          if (tempSelection.length === 0) {
+          if (currentSelection.length === 0) {
             showToast("Harap centang setidaknya satu pernyataan sebelum mengunci jawaban!", false);
             return;
           }
 
-          const sortedUser = [...tempSelection].sort().join(',');
+          const sortedUser = [...currentSelection].sort().join(',');
           const sortedCorrect = [...q.correctAnswer].sort().join(',');
           const isRight = (sortedUser === sortedCorrect);
 
           state.isSubmitted = true;
           state.isCorrect = isRight;
-          state.answer = tempSelection;
+          state.answer = currentSelection;
+          state.draftAnswer = null;
 
           showToast(isRight ? "Jawaban Anda Benar!" : "Jawaban Anda Belum Tepat", isRight);
           renderQuestionNav();
@@ -1190,7 +1210,9 @@
     }
 
     function renderMatrixChoice(q, state, container) {
-      let tempAnswers = Array.isArray(state.answer) ? [...state.answer] : [null, null, null];
+      let currentMatrixAnswers = state.isSubmitted
+        ? (Array.isArray(state.answer) ? [...state.answer] : [null, null, null])
+        : (Array.isArray(state.draftAnswer) ? [...state.draftAnswer] : [null, null, null]);
 
       const tableWrapper = document.createElement('div');
       tableWrapper.className = "overflow-x-auto rounded-xl border border-slate-200 mb-3";
@@ -1226,8 +1248,8 @@
         radioTrue.type = 'radio';
         radioTrue.name = `matrix-row-${q.id}-${idx}`;
         radioTrue.disabled = state.isSubmitted;
-        radioTrue.checked = (tempAnswers[idx] === true);
-        radioTrue.className = "w-4 h-4 text-blue-600 focus:ring-blue-500";
+        radioTrue.checked = (currentMatrixAnswers[idx] === true);
+        radioTrue.className = "w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer";
 
         const tdFalse = document.createElement('td');
         tdFalse.className = "p-3 sm:p-3.5 text-center";
@@ -1235,15 +1257,25 @@
         radioFalse.type = 'radio';
         radioFalse.name = `matrix-row-${q.id}-${idx}`;
         radioFalse.disabled = state.isSubmitted;
-        radioFalse.checked = (tempAnswers[idx] === false);
-        radioFalse.className = "w-4 h-4 text-blue-600 focus:ring-blue-500";
+        radioFalse.checked = (currentMatrixAnswers[idx] === false);
+        radioFalse.className = "w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer";
 
         if (!state.isSubmitted) {
           radioTrue.addEventListener('change', () => {
-            if (radioTrue.checked) tempAnswers[idx] = true;
+            if (radioTrue.checked) {
+              currentMatrixAnswers[idx] = true;
+              state.draftAnswer = [...currentMatrixAnswers];
+              renderQuestionNav();
+              triggerAutosave();
+            }
           });
           radioFalse.addEventListener('change', () => {
-            if (radioFalse.checked) tempAnswers[idx] = false;
+            if (radioFalse.checked) {
+              currentMatrixAnswers[idx] = false;
+              state.draftAnswer = [...currentMatrixAnswers];
+              renderQuestionNav();
+              triggerAutosave();
+            }
           });
         }
 
@@ -1269,16 +1301,17 @@
         `;
 
         submitBtn.addEventListener('click', () => {
-          if (tempAnswers.some(ans => ans === null)) {
+          if (currentMatrixAnswers.some(ans => ans === null)) {
             showToast("Harap tentukan Benar atau Salah pada seluruh baris pernyataan!", false);
             return;
           }
 
-          const isRight = tempAnswers.every((ans, i) => ans === q.correctAnswer[i]);
+          const isRight = currentMatrixAnswers.every((ans, i) => ans === q.correctAnswer[i]);
 
           state.isSubmitted = true;
           state.isCorrect = isRight;
-          state.answer = tempAnswers;
+          state.answer = currentMatrixAnswers;
+          state.draftAnswer = null;
 
           showToast(isRight ? "Jawaban Anda Benar!" : "Jawaban Anda Belum Tepat", isRight);
           renderQuestionNav();
@@ -1291,15 +1324,10 @@
     }
 
     function buildAnalysisSummary() {
-      // Subtopik 1: Soal 1, 2, 3 (3 soal)
       const correctSub1 = [0, 1, 2].filter(i => userProgress[i].isCorrect).length;
-      // Subtopik 2: Soal 4, 5, 6, 7 (4 soal)
       const correctSub2 = [3, 4, 5, 6].filter(i => userProgress[i].isCorrect).length;
-      // Subtopik 3: Soal 8, 9, 10 (3 soal)
       const correctSub3 = [7, 8, 9].filter(i => userProgress[i].isCorrect).length;
 
-      // FORMAT SESUAI PERMINTAAN KETAT:
-      // subtopik .... (banyak benar/jumlah soal subtopik tersebut) | subtopik .... (banyak benar/jumlah soal subtopik tersebut)
       return `subtopik Literasi Teks Ilmiah & Rekayasa Ekologi (${correctSub1}/3) | subtopik Analisis Prosa Naratif & Dinamika Sosio-Kultural (${correctSub2}/4) | subtopik Penalaran Kritis & Etika AI (${correctSub3}/3)`;
     }
 
@@ -1308,7 +1336,6 @@
       
       try {
         if (!GOOGLE_SCRIPT_WEBHOOK_URL || GOOGLE_SCRIPT_WEBHOOK_URL.includes('YOUR_DEPLOYMENT_ID_HERE')) {
-          console.info("Google Script Webhook belum dikonfigurasi dengan ID deployment resmi. Data dicatat secara lokal.");
           syncStatusBadge.innerHTML = `
             <svg class="w-3.5 h-3.5 mr-1.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
             <span>Hasil Terverifikasi di Perangkat Ini</span>
@@ -1321,7 +1348,6 @@
           <span>Menyinkronkan ke Spreadsheet...</span>
         `;
 
-        // Kirim menggunakan mode no-cors untuk keamanan deployment Apps Script webapp
         await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
           method: 'POST',
           mode: 'no-cors',
@@ -1349,6 +1375,7 @@
     async function finalizeAndSubmitExam(isTimeout = false) {
       if (timerInterval) clearInterval(timerInterval);
       isExamFinished = true;
+      isExamInProgress = false;
 
       let totalCorrect = 0;
       userProgress.forEach(p => {
@@ -1357,7 +1384,6 @@
 
       const totalQuestions = QUESTIONS.length;
       const totalWrong = totalQuestions - totalCorrect;
-      // Poin rata per soal = 10 poin (Maks 100)
       const finalScore = totalCorrect * 10;
       const timeRemainingStr = formatTime(remainingTimeSeconds);
       const analysisString = buildAnalysisSummary();
@@ -1371,7 +1397,7 @@
         second: '2-digit'
       }) + ' WIB';
 
-      // 1. Simpan status final ke IndexedDB sebagai penanda permanen 1 KALI PENGERJAAN
+      // 1. Simpan status final ke StorageEngine sebagai penanda permanen 1 KALI PENGERJAAN
       const finalState = {
         studentName,
         studentClass,
@@ -1385,8 +1411,9 @@
         completedAt: currentTimestamp,
         isCompleted: true
       };
-      await saveStateToDB('completed_exam_report', finalState);
-      await saveStateToDB('current_quiz_session', null); // Bersihkan sesi aktif
+      
+      StorageEngine.save(STORAGE_KEY_REPORT, finalState);
+      StorageEngine.remove(STORAGE_KEY_SESSION); // Hapus sesi aktif karena telah final
 
       // 2. Kirim payload data ke Google Spreadsheet tab "TKA INDO4"
       const payload = {
@@ -1408,7 +1435,7 @@
       displayResultsUI(finalState);
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
-      // Lakukan transmisi ke Google Apps Script di latar belakang
+      // Transmisi ke Google Apps Script di latar belakang
       sendDataToGoogleSheet(payload);
     }
 
@@ -1532,7 +1559,7 @@
       });
     }
 
-    document.addEventListener('DOMContentLoaded', async () => {
+    document.addEventListener('DOMContentLoaded', () => {
       
       const welcomeView = document.getElementById('welcome-view');
       const quizView = document.getElementById('quiz-view');
@@ -1540,8 +1567,10 @@
       const deadlineBanner = document.getElementById('deadline-banner');
       const startBtn = document.getElementById('start-quiz-btn');
       const startBtnLabel = document.getElementById('start-btn-label');
+      const nameInput = document.getElementById('student-name-input');
+      const classSelect = document.getElementById('student-class-select');
 
-      // 1. Evaluasi Deadline / Periode Aktif (Melalui Kode)
+      // 1. Evaluasi Deadline / Periode Aktif
       const now = Date.now();
       const isPeriodActive = (now >= DEADLINE_CONFIG.startDate && now <= DEADLINE_CONFIG.endDate) || DEADLINE_CONFIG.bypassForTesting;
 
@@ -1566,47 +1595,73 @@
         }
       }
 
-      // 2. Evaluasi 1 Kali Pengerjaan: Periksa apakah siswa sudah pernah selesai
-      const completedReport = await loadStateFromDB('completed_exam_report');
+      // 2. Evaluasi 1 Kali Pengerjaan: Jika sudah pernah selesai, langsung arahkan ke skor & analisis
+      const completedReport = StorageEngine.load(STORAGE_KEY_REPORT);
       if (completedReport && completedReport.isCompleted) {
-        // Tampilkan halaman hasil langsung tanpa menampilkan pembahasan
-        document.getElementById('already-completed-notice').classList.remove('hidden');
-        document.getElementById('identity-box').classList.add('hidden');
-        startBtnLabel.textContent = "Lihat Rekapitulasi Skor & Analisis Anda";
-
-        startBtn.onclick = () => {
-          welcomeView.classList.add('hidden');
-          resultView.classList.remove('hidden');
-          displayResultsUI(completedReport);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        };
+        welcomeView.classList.add('hidden');
+        quizView.classList.add('hidden');
+        resultView.classList.remove('hidden');
+        displayResultsUI(completedReport);
+        showToast("Memuat hasil ujian yang telah Anda selesaikan sebelumnya.", true);
         return;
       }
 
-      // 3. Evaluasi Fitur Autosave: Periksa apakah terdapat sesi belum selesai yang terputus
-      const savedSession = await loadStateFromDB('current_quiz_session');
-      if (savedSession && !savedSession.isCompleted) {
+      // 3. Evaluasi Fitur Autosave & Pemulihan Otomatis Saat Web Dibuka Kembali
+      const savedSession = StorageEngine.load(STORAGE_KEY_SESSION);
+      if (savedSession) {
         studentName = savedSession.studentName || '';
         studentClass = savedSession.studentClass || '';
-        document.getElementById('student-name-input').value = studentName;
-        document.getElementById('student-class-select').value = studentClass;
-        
-        currentQuestionIdx = savedSession.currentQuestionIdx || 0;
-        remainingTimeSeconds = typeof savedSession.remainingTimeSeconds === 'number' 
-          ? savedSession.remainingTimeSeconds 
-          : TOTAL_QUIZ_DURATION_SECONDS;
-        userProgress = savedSession.userProgress || userProgress;
-        examStartTime = savedSession.examStartTime || Date.now();
+        if (nameInput) nameInput.value = studentName;
+        if (classSelect) classSelect.value = studentClass;
 
-        startBtnLabel.textContent = `Lanjutkan Pengerjaan (Soal #${currentQuestionIdx + 1})`;
-        showToast("Sesi pengerjaan sebelumnya dipulihkan dari autosave!", true);
+        // JIKA SISWA SEDANG DALAM PROSES UJIAN SAAT WEB TERTUTUP:
+        // LANGSUNG PULIHKAN KE LEMBAR SOAL, WAKTU TERAKHIR, & NOMOR TERAKHIR SECARA OTOMATIS
+        if (savedSession.inProgress && !savedSession.isCompleted) {
+          isExamInProgress = true;
+          currentQuestionIdx = typeof savedSession.currentQuestionIdx === 'number' ? savedSession.currentQuestionIdx : 0;
+          remainingTimeSeconds = typeof savedSession.remainingTimeSeconds === 'number' 
+            ? savedSession.remainingTimeSeconds 
+            : TOTAL_QUIZ_DURATION_SECONDS;
+          
+          if (Array.isArray(savedSession.userProgress) && savedSession.userProgress.length === QUESTIONS.length) {
+            userProgress = savedSession.userProgress;
+          }
+          examStartTime = savedSession.examStartTime || Date.now();
+
+          // Tampilkan info siswa di header
+          document.getElementById('header-student-name').textContent = studentName;
+          document.getElementById('header-student-class').textContent = studentClass;
+          document.getElementById('header-student-info').classList.remove('hidden');
+
+          // Alihkan langsung ke tampilan soal latihan (Quiz View)
+          welcomeView.classList.add('hidden');
+          quizView.classList.remove('hidden');
+
+          renderQuestionNav();
+          loadCurrentQuestion();
+          startQuizTimer();
+
+          showToast(`Sesi dipulihkan dari autosave! Melanjutkan Soal #${currentQuestionIdx + 1} (Sisa Waktu: ${formatTime(remainingTimeSeconds)})`, true);
+          return;
+        }
+      }
+
+      // Simpan input identitas seketika saat diketik/dipilih
+      if (nameInput) {
+        nameInput.addEventListener('input', () => {
+          studentName = nameInput.value.trim();
+          triggerAutosave();
+        });
+      }
+      if (classSelect) {
+        classSelect.addEventListener('change', () => {
+          studentClass = classSelect.value;
+          triggerAutosave();
+        });
       }
 
       // 4. Tombol Mulai dengan Validasi
       startBtn.addEventListener('click', () => {
-        const nameInput = document.getElementById('student-name-input');
-        const classSelect = document.getElementById('student-class-select');
-
         studentName = nameInput.value.trim();
         studentClass = classSelect.value;
 
@@ -1622,12 +1677,13 @@
           return;
         }
 
+        isExamInProgress = true;
+        if (!examStartTime) examStartTime = Date.now();
+
         // Tampilkan info siswa di header saat pengerjaan
         document.getElementById('header-student-name').textContent = studentName;
         document.getElementById('header-student-class').textContent = studentClass;
         document.getElementById('header-student-info').classList.remove('hidden');
-
-        if (!examStartTime) examStartTime = Date.now();
 
         welcomeView.classList.add('hidden');
         quizView.classList.remove('hidden');
@@ -1681,7 +1737,18 @@
         finalizeAndSubmitExam(false);
       });
 
-      // Tombol Salin Ringkasan Konsultasi (Menggunakan document.execCommand Sesuai Aturan)
+      // Pasang pengaman autosave saat jendela/tab hendak ditutup atau dialihkan
+      window.addEventListener('beforeunload', () => {
+        triggerAutosave();
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          triggerAutosave();
+        }
+      });
+
+      // Tombol Salin Ringkasan Konsultasi
       document.getElementById('copy-summary-btn').addEventListener('click', () => {
         let correctCount = userProgress.filter(p => p.isCorrect).length;
         let score = correctCount * 10;
