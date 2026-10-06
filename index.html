@@ -113,7 +113,7 @@
         
         <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
           <span class="w-1.5 h-1.5 rounded-full bg-blue-600 mr-1.5 animate-pulse"></span>
-          Periode: 5 - 11 Okt 2026
+          Periode: 6 - 12 Okt 2026
         </span>
       </div>
     </div>
@@ -163,7 +163,7 @@
                 <span class="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 text-blue-700 font-bold text-sm flex items-center justify-center mr-3 mt-0.5">1</span>
                 <div>
                   <strong class="text-slate-900 font-semibold">Periode Pengerjaan:</strong>
-                  <p class="text-slate-600">Latihan akan terbuka untuk dikerjakan selama periode <span class="font-semibold text-blue-700">5 - 11 Oktober 2026</span>.</p>
+                  <p class="text-slate-600">Latihan akan terbuka untuk dikerjakan selama periode <span class="font-semibold text-blue-700">6 - 12 Oktober 2026</span>.</p>
                 </div>
               </li>
               
@@ -554,7 +554,7 @@
        Dapat diedit melalui kode saja sesuai instruksi
        ===================================================================== */
     const DEADLINE_CONFIG = {
-      // Periode aktif latihan: 5 - 11 Oktober 2026
+      // Periode aktif latihan: 6 - 12 Oktober 2026
       startDate: new Date('2026-10-06T15:00:00+07:00').getTime(),
       endDate: new Date('2026-10-12T08:00:00+07:00').getTime(),
       // Mock switch: jika true, mengizinkan pengerjaan untuk keperluan preview/pengujian developer
@@ -1691,7 +1691,7 @@
         reportText += `Skor Akhir     : ${score} / 100 (${correctCount} Benar, ${10 - correctCount} Salah)\n`;
         reportText += `Sisa Waktu     : ${formatTime(remainingTimeSeconds)}\n`;
         reportText += `Analisis       : ${analysisStr}\n`;
-        reportText += `Periode Ujian  : 5 - 11 Oktober 2026\n\n`;
+        reportText += `Periode Ujian  : 6 - 12 Oktober 2026\n\n`;
         reportText += `Detail Status Jawaban (Tanpa Pembahasan):\n`;
         userProgress.forEach((p, i) => {
           reportText += `- Soal #${i + 1}: ${p.isCorrect ? 'BENAR (+10)' : 'SALAH (0)'}\n`;
