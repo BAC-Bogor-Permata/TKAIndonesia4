@@ -1566,101 +1566,62 @@
       const resultView = document.getElementById('result-view');
       const deadlineBanner = document.getElementById('deadline-banner');
       const startBtn = document.getElementById('start-quiz-btn');
-      const startBtnLabel = document.getElementById('start-btn-label');
       const nameInput = document.getElementById('student-name-input');
       const classSelect = document.getElementById('student-class-select');
+      const prevBtn = document.getElementById('prev-btn');
+      const nextBtn = document.getElementById('next-btn');
+      const finishBtn = document.getElementById('finish-btn');
+      const copySummaryBtn = document.getElementById('copy-summary-btn');
 
-      // 1. Evaluasi Deadline / Periode Aktif
-      const now = Date.now();
-      const isPeriodActive = (now >= DEADLINE_CONFIG.startDate && now <= DEADLINE_CONFIG.endDate) || DEADLINE_CONFIG.bypassForTesting;
-
-      if (!isPeriodActive) {
-        deadlineBanner.classList.remove('hidden');
-        if (now < DEADLINE_CONFIG.startDate) {
-          deadlineBanner.className = "mb-6 p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 text-sm font-semibold flex items-center space-x-3";
-          deadlineBanner.innerHTML = `
-            <svg class="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            <div>Latihan Belum Dibuka. Periode pengerjaan resmi baru akan dimulai pada <span class="underline">5 Oktober 2026 pukul 00:00 WIB</span>.</div>
-          `;
-          startBtn.disabled = true;
-          startBtn.classList.add('opacity-50', 'cursor-not-allowed');
-        } else {
-          deadlineBanner.className = "mb-6 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-semibold flex items-center space-x-3";
-          deadlineBanner.innerHTML = `
-            <svg class="w-5 h-5 text-rose-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            <div>Periode Latihan Telah Berakhir pada <span class="underline">11 Oktober 2026 pukul 23:59 WIB</span>. Pembahasan soal akan segera dibuka.</div>
-          `;
-          startBtn.disabled = true;
-          startBtn.classList.add('opacity-50', 'cursor-not-allowed');
-        }
-      }
-
-      // 2. Evaluasi 1 Kali Pengerjaan: Jika sudah pernah selesai, langsung arahkan ke skor & analisis
-      const completedReport = StorageEngine.load(STORAGE_KEY_REPORT);
-      if (completedReport && completedReport.isCompleted) {
-        welcomeView.classList.add('hidden');
-        quizView.classList.add('hidden');
-        resultView.classList.remove('hidden');
-        displayResultsUI(completedReport);
-        showToast("Memuat hasil ujian yang telah Anda selesaikan sebelumnya.", true);
-        return;
-      }
-
-      // 3. Evaluasi Fitur Autosave & Pemulihan Otomatis Saat Web Dibuka Kembali
-      const savedSession = StorageEngine.load(STORAGE_KEY_SESSION);
-      if (savedSession) {
-        studentName = savedSession.studentName || '';
-        studentClass = savedSession.studentClass || '';
-        if (nameInput) nameInput.value = studentName;
-        if (classSelect) classSelect.value = studentClass;
-
-        // JIKA SISWA SEDANG DALAM PROSES UJIAN SAAT WEB TERTUTUP:
-        // LANGSUNG PULIHKAN KE LEMBAR SOAL, WAKTU TERAKHIR, & NOMOR TERAKHIR SECARA OTOMATIS
-        if (savedSession.inProgress && !savedSession.isCompleted) {
-          isExamInProgress = true;
-          currentQuestionIdx = typeof savedSession.currentQuestionIdx === 'number' ? savedSession.currentQuestionIdx : 0;
-          remainingTimeSeconds = typeof savedSession.remainingTimeSeconds === 'number' 
-            ? savedSession.remainingTimeSeconds 
-            : TOTAL_QUIZ_DURATION_SECONDS;
-          
-          if (Array.isArray(savedSession.userProgress) && savedSession.userProgress.length === QUESTIONS.length) {
-            userProgress = savedSession.userProgress;
-          }
-          examStartTime = savedSession.examStartTime || Date.now();
-
-          // Tampilkan info siswa di header
-          document.getElementById('header-student-name').textContent = studentName;
-          document.getElementById('header-student-class').textContent = studentClass;
-          document.getElementById('header-student-info').classList.remove('hidden');
-
-          // Alihkan langsung ke tampilan soal latihan (Quiz View)
-          welcomeView.classList.add('hidden');
-          quizView.classList.remove('hidden');
-
+      // Daftarkan seluruh event listener navigasi terlebih dahulu agar SELALU aktif
+      // terlepas dari apakah sesi baru atau hasil pemulihan autosave
+      prevBtn.addEventListener('click', () => {
+        if (currentQuestionIdx > 0) {
+          currentQuestionIdx--;
           renderQuestionNav();
           loadCurrentQuestion();
-          startQuizTimer();
+          triggerAutosave();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      });
 
-          showToast(`Sesi dipulihkan dari autosave! Melanjutkan Soal #${currentQuestionIdx + 1} (Sisa Waktu: ${formatTime(remainingTimeSeconds)})`, true);
+      nextBtn.addEventListener('click', () => {
+        if (currentQuestionIdx < QUESTIONS.length - 1) {
+          currentQuestionIdx++;
+          renderQuestionNav();
+          loadCurrentQuestion();
+          triggerAutosave();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+          // Ketika berada di nomor 10 (terakhir)
+          const unsubmittedIdx = userProgress.findIndex(p => !p.isSubmitted);
+          if (unsubmittedIdx !== -1) {
+            currentQuestionIdx = unsubmittedIdx;
+            renderQuestionNav();
+            loadCurrentQuestion();
+            showToast(`Mengalihkan ke Soal #${unsubmittedIdx + 1} yang belum dikunci`, false);
+          } else {
+            // Seluruh soal telah terkunci, langsung jalankan pengumpulan
+            finalizeAndSubmitExam(false);
+          }
+        }
+      });
+
+      finishBtn.addEventListener('click', () => {
+        const remaining = userProgress.filter(p => !p.isSubmitted).length;
+        if (remaining > 0) {
+          const firstUnsubmitted = userProgress.findIndex(p => !p.isSubmitted);
+          showToast(`Masih ada ${remaining} soal yang belum dikunci! Mengalihkan ke Soal #${firstUnsubmitted + 1}.`, false);
+          currentQuestionIdx = firstUnsubmitted;
+          renderQuestionNav();
+          loadCurrentQuestion();
           return;
         }
-      }
 
-      // Simpan input identitas seketika saat diketik/dipilih
-      if (nameInput) {
-        nameInput.addEventListener('input', () => {
-          studentName = nameInput.value.trim();
-          triggerAutosave();
-        });
-      }
-      if (classSelect) {
-        classSelect.addEventListener('change', () => {
-          studentClass = classSelect.value;
-          triggerAutosave();
-        });
-      }
+        finalizeAndSubmitExam(false);
+      });
 
-      // 4. Tombol Mulai dengan Validasi
+      // Tombol Mulai Ujian dari Welcoming Page
       startBtn.addEventListener('click', () => {
         studentName = nameInput.value.trim();
         studentClass = classSelect.value;
@@ -1680,7 +1641,7 @@
         isExamInProgress = true;
         if (!examStartTime) examStartTime = Date.now();
 
-        // Tampilkan info siswa di header saat pengerjaan
+        // Tampilkan identitas siswa pada header
         document.getElementById('header-student-name').textContent = studentName;
         document.getElementById('header-student-class').textContent = studentClass;
         document.getElementById('header-student-info').classList.remove('hidden');
@@ -1695,49 +1656,19 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
 
-      // Tombol Navigasi Next & Prev
-      document.getElementById('prev-btn').addEventListener('click', () => {
-        if (currentQuestionIdx > 0) {
-          currentQuestionIdx--;
-          renderQuestionNav();
-          loadCurrentQuestion();
+      if (nameInput) {
+        nameInput.addEventListener('input', () => {
+          studentName = nameInput.value.trim();
           triggerAutosave();
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-      });
-
-      document.getElementById('next-btn').addEventListener('click', () => {
-        if (currentQuestionIdx < QUESTIONS.length - 1) {
-          currentQuestionIdx++;
-          renderQuestionNav();
-          loadCurrentQuestion();
+        });
+      }
+      if (classSelect) {
+        classSelect.addEventListener('change', () => {
+          studentClass = classSelect.value;
           triggerAutosave();
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        } else {
-          const unsubmittedIdx = userProgress.findIndex(p => !p.isSubmitted);
-          if (unsubmittedIdx !== -1) {
-            currentQuestionIdx = unsubmittedIdx;
-            renderQuestionNav();
-            loadCurrentQuestion();
-            showToast(`Mengalihkan ke Soal #${unsubmittedIdx + 1} yang belum dikunci`, false);
-          } else {
-            showToast("Semua soal telah dikunci. Anda dapat mengumpulkan lembar jawaban.", true);
-          }
-        }
-      });
+        });
+      }
 
-      // Tombol Selesaikan Latihan
-      document.getElementById('finish-btn').addEventListener('click', () => {
-        const remaining = userProgress.filter(p => !p.isSubmitted).length;
-        if (remaining > 0) {
-          showToast(`Masih terdapat ${remaining} soal yang belum dikunci! Silakan periksa kembali nomor soal.`, false);
-          return;
-        }
-
-        finalizeAndSubmitExam(false);
-      });
-
-      // Pasang pengaman autosave saat jendela/tab hendak ditutup atau dialihkan
       window.addEventListener('beforeunload', () => {
         triggerAutosave();
       });
@@ -1748,8 +1679,7 @@
         }
       });
 
-      // Tombol Salin Ringkasan Konsultasi
-      document.getElementById('copy-summary-btn').addEventListener('click', () => {
+      copySummaryBtn.addEventListener('click', () => {
         let correctCount = userProgress.filter(p => p.isCorrect).length;
         let score = correctCount * 10;
         let analysisStr = buildAnalysisSummary();
@@ -1789,6 +1719,78 @@
           document.body.removeChild(tempTextArea);
         }
       });
+
+      const now = Date.now();
+      const isPeriodActive = (now >= DEADLINE_CONFIG.startDate && now <= DEADLINE_CONFIG.endDate) || DEADLINE_CONFIG.bypassForTesting;
+
+      if (!isPeriodActive) {
+        deadlineBanner.classList.remove('hidden');
+        if (now < DEADLINE_CONFIG.startDate) {
+          deadlineBanner.className = "mb-6 p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 text-sm font-semibold flex items-center space-x-3";
+          deadlineBanner.innerHTML = `
+            <svg class="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <div>Latihan Belum Dibuka. Periode pengerjaan resmi baru akan dimulai pada <span class="underline">5 Oktober 2026 pukul 00:00 WIB</span>.</div>
+          `;
+          startBtn.disabled = true;
+          startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        } else {
+          deadlineBanner.className = "mb-6 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-semibold flex items-center space-x-3";
+          deadlineBanner.innerHTML = `
+            <svg class="w-5 h-5 text-rose-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <div>Periode Latihan Telah Berakhir pada <span class="underline">11 Oktober 2026 pukul 23:59 WIB</span>. Pembahasan soal akan segera dibuka.</div>
+          `;
+          startBtn.disabled = true;
+          startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+      }
+
+      // 1. Cek apakah ujian sudah selesai (1 kali pengerjaan)
+      const completedReport = StorageEngine.load(STORAGE_KEY_REPORT);
+      if (completedReport && completedReport.isCompleted) {
+        welcomeView.classList.add('hidden');
+        quizView.classList.add('hidden');
+        resultView.classList.remove('hidden');
+        displayResultsUI(completedReport);
+        showToast("Memuat hasil ujian yang telah Anda selesaikan sebelumnya.", true);
+        return;
+      }
+
+      // 2. Cek pemulihan sesi autosave aktif
+      const savedSession = StorageEngine.load(STORAGE_KEY_SESSION);
+      if (savedSession) {
+        studentName = savedSession.studentName || '';
+        studentClass = savedSession.studentClass || '';
+        if (nameInput) nameInput.value = studentName;
+        if (classSelect) classSelect.value = studentClass;
+
+        if (savedSession.inProgress && !savedSession.isCompleted) {
+          isExamInProgress = true;
+          currentQuestionIdx = typeof savedSession.currentQuestionIdx === 'number' ? savedSession.currentQuestionIdx : 0;
+          remainingTimeSeconds = typeof savedSession.remainingTimeSeconds === 'number' 
+            ? savedSession.remainingTimeSeconds 
+            : TOTAL_QUIZ_DURATION_SECONDS;
+          
+          if (Array.isArray(savedSession.userProgress) && savedSession.userProgress.length === QUESTIONS.length) {
+            userProgress = savedSession.userProgress;
+          }
+          examStartTime = savedSession.examStartTime || Date.now();
+
+          // Tampilkan info siswa di header
+          document.getElementById('header-student-name').textContent = studentName;
+          document.getElementById('header-student-class').textContent = studentClass;
+          document.getElementById('header-student-info').classList.remove('hidden');
+
+          // Alihkan langsung ke tampilan soal latihan (Quiz View)
+          welcomeView.classList.add('hidden');
+          quizView.classList.remove('hidden');
+
+          renderQuestionNav();
+          loadCurrentQuestion();
+          startQuizTimer();
+
+          showToast(`Sesi dipulihkan dari autosave! Melanjutkan Soal #${currentQuestionIdx + 1} (Sisa Waktu: ${formatTime(remainingTimeSeconds)})`, true);
+        }
+      }
 
     });
   </script>
